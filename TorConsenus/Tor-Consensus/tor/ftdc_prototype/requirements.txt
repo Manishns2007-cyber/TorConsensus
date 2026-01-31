@@ -1,0 +1,21 @@
+streamlit>=1.20.0
+scapy
+numpy
+scipy
+matplotlib
+plotly
+requests
+pytest
+reportlab
+pillow
+
+# AI Risk Engine dependencies
+pandas>=1.3.0
+scikit-learn>=1.0.0
+joblib>=1.1.0
+
+# Production utilities
+python-dotenv>=1.0.0
+
+# Logging and monitoring
+structlog>=23.0.0

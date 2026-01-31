@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=65.5", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ftdc-prototype"
+version = "0.1.0"
+description = "Ethical FTDC Tor traffic correlation prototype with visualization dashboards."
+readme = "README.md"
+authors = [
+  {name = "FTDC Research Team", email = "research@ftdc.example"}
+]
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+  "streamlit>=1.20.0",
+  "scapy",
+  "numpy",
+  "scipy",
+  "matplotlib",
+  "plotly",
+  "requests"
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+ftdc-dashboard = "streamlit_dashboard.app:main"

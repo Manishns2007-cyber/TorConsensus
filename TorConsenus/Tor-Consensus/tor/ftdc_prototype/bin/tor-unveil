@@ -1,0 +1,381 @@
+#!/usr/bin/env python3
+"""
+TOR-Unveil Command Line Interface
+Main entry point for TOR traffic analysis system
+"""
+import sys
+import os
+import argparse
+from datetime import datetime
+
+
+def main():
+    """Main CLI entry point."""
+    parser = argparse.ArgumentParser(
+        prog='tor-unveil',
+        description='TOR-Unveil: Forensic TOR Traffic Analysis System',
+        epilog='For more information, see SYSTEM_GUIDE.md'
+    )
+    
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    
+    # Analyze command
+    analyze_parser = subparsers.add_parser('analyze', help='Analyze a PCAP file')
+    analyze_parser.add_argument('pcap', help='Path to PCAP file')
+    analyze_parser.add_argument('-o', '--output-dir', default='results', help='Output directory')
+    analyze_parser.add_argument('-w', '--window', type=int, default=50, help='FTDC window size (ms)')
+    analyze_parser.add_argument('--case-id', help='Case ID for forensic report')
+    analyze_parser.add_argument('--investigator', help='Investigator name')
+    analyze_parser.add_argument('--agency', default='TN Police Cybercrime', help='Agency name')
+    analyze_parser.add_argument('--no-viz', action='store_true', help='Skip visualizations')
+    analyze_parser.add_argument('--export', choices=['json', 'csv', 'html', 'all'], help='Export format')
+    
+    # Capture command
+    capture_parser = subparsers.add_parser('capture', help='Capture TOR traffic in real-time')
+    capture_parser.add_argument('-i', '--interface', default='eth0', help='Network interface')
+    capture_parser.add_argument('-d', '--duration', type=int, help='Capture duration (seconds)')
+    capture_parser.add_argument('-c', '--count', type=int, help='Number of packets to capture')
+    capture_parser.add_argument('-o', '--output', default='tor_capture.pcap', help='Output PCAP file')
+    capture_parser.add_argument('--ports', nargs='+', type=int, help='TOR ports to monitor')
+    capture_parser.add_argument('--analyze', action='store_true', help='Analyze after capture')
+    
+    # Info command
+    info_parser = subparsers.add_parser('info', help='Show system information')
+    
+    # List command
+    list_parser = subparsers.add_parser('list', help='List previous analyses')
+    list_parser.add_argument('-n', '--limit', type=int, default=10, help='Number of analyses to show')
+    list_parser.add_argument('--db', default='ftdc_analysis.db', help='Database path')
+    
+    # Export command
+    export_parser = subparsers.add_parser('export', help='Export analysis results')
+    export_parser.add_argument('analysis_id', help='Analysis ID to export')
+    export_parser.add_argument('-f', '--format', choices=['json', 'csv', 'html'], required=True, help='Export format')
+    export_parser.add_argument('--db', default='ftdc_analysis.db', help='Database path')
+    
+    # Consensus command
+    consensus_parser = subparsers.add_parser('consensus', help='Fetch TOR consensus data')
+    consensus_parser.add_argument('-l', '--limit', type=int, default=500, help='Number of relays')
+    consensus_parser.add_argument('-o', '--output', help='Save to JSON file')
+    consensus_parser.add_argument('--guards-only', action='store_true', help='Show only guard relays')
+    consensus_parser.add_argument('--exits-only', action='store_true', help='Show only exit relays')
+    
+    # Version command
+    version_parser = subparsers.add_parser('version', help='Show version information')
+    
+    args = parser.parse_args()
+    
+    if not args.command:
+        parser.print_help()
+        return 0
+    
+    # Handle commands
+    if args.command == 'analyze':
+        return handle_analyze(args)
+    elif args.command == 'capture':
+        return handle_capture(args)
+    elif args.command == 'info':
+        return handle_info(args)
+    elif args.command == 'list':
+        return handle_list(args)
+    elif args.command == 'export':
+        return handle_export(args)
+    elif args.command == 'consensus':
+        return handle_consensus(args)
+    elif args.command == 'version':
+        return handle_version(args)
+    
+    return 0
+
+
+def handle_analyze(args):
+    """Handle analyze command."""
+    try:
+        from ftdc.orchestrator import TorAnalysisOrchestrator
+    except ImportError:
+        print("❌ Error: Required modules not available")
+        return 1
+    
+    if not os.path.exists(args.pcap):
+        print(f"❌ Error: PCAP file not found: {args.pcap}")
+        return 1
+    
+    print(f"🔍 TOR-Unveil Analysis")
+    print(f"   PCAP: {args.pcap}")
+    print(f"   Output: {args.output_dir}")
+    print()
+    
+    # Prepare case metadata
+    case_metadata = None
+    if args.case_id or args.investigator:
+        case_metadata = {
+            'case_id': args.case_id,
+            'investigator': args.investigator,
+            'agency': args.agency
+        }
+    
+    # Create orchestrator
+    orchestrator = TorAnalysisOrchestrator(
+        db_path=os.path.join(args.output_dir, 'ftdc_analysis.db'),
+        results_dir=args.output_dir
+    )
+    
+    # Run analysis
+    results = orchestrator.full_analysis(
+        pcap_path=args.pcap,
+        case_metadata=case_metadata,
+        window_ms=args.window,
+        visualizations=not args.no_viz
+    )
+    
+    if results.get('status') == 'completed':
+        print()
+        print("=" * 70)
+        print("✅ Analysis Complete")
+        print("=" * 70)
+        print(f"Analysis ID: {results['analysis_id']}")
+        print(f"Duration: {results['analysis_duration']:.2f}s")
+        print(f"Guards Identified: {len(results.get('guard_scores', []))}")
+        
+        if results.get('guard_scores'):
+            top_guard = results['guard_scores'][0]
+            print(f"Top Guard: {top_guard['nickname']} ({top_guard['confidence']:.1%} confidence)")
+        
+        print(f"PDF Report: {results.get('pdf_report')}")
+        
+        # Export if requested
+        if args.export:
+            print()
+            formats = ['json', 'csv', 'html'] if args.export == 'all' else [args.export]
+            for fmt in formats:
+                path = orchestrator.export_results(results['analysis_id'], fmt)
+                print(f"Exported {fmt.upper()}: {path}")
+        
+        return 0
+    else:
+        print(f"\n❌ Analysis failed: {results.get('error', 'Unknown error')}")
+        return 1
+
+
+def handle_capture(args):
+    """Handle capture command."""
+    try:
+        from ftdc.realtime_capture import RealTimeTorCapture
+    except ImportError:
+        print("❌ Error: Real-time capture not available")
+        print("   Install with: pip install scapy")
+        return 1
+    
+    import time
+    
+    print(f"🔍 TOR Traffic Capture")
+    print(f"   Interface: {args.interface}")
+    print(f"   Output: {args.output}")
+    
+    if args.duration:
+        print(f"   Duration: {args.duration}s")
+    if args.count:
+        print(f"   Packet limit: {args.count}")
+    
+    print()
+    print("⚠️  Note: Packet capture requires root/sudo privileges")
+    print()
+    
+    # Create capture instance
+    capture = RealTimeTorCapture(
+        interface=args.interface,
+        tor_ports=args.ports
+    )
+    
+    # Start capture
+    if not capture.start_capture(duration=args.duration, packet_count=args.count):
+        return 1
+    
+    # Wait for capture
+    try:
+        if args.duration:
+            time.sleep(args.duration + 1)
+        elif args.count:
+            while capture.capture_active:
+                time.sleep(1)
+                if int(time.time()) % 5 == 0:
+                    stats = capture.get_statistics()
+                    print(f"   Captured: {stats['tor_packets']} TOR packets", end='\r')
+        else:
+            print("Press Ctrl+C to stop capture...")
+            while capture.capture_active:
+                time.sleep(1)
+                if int(time.time()) % 5 == 0:
+                    stats = capture.get_statistics()
+                    print(f"   Captured: {stats['tor_packets']} TOR packets", end='\r')
+    
+    except KeyboardInterrupt:
+        print("\n⚠️  Interrupted by user")
+    
+    finally:
+        capture.stop_capture()
+        if capture.save_capture(args.output):
+            print(f"\n✅ Saved capture to: {args.output}")
+            
+            # Analyze if requested
+            if args.analyze:
+                print("\n🔍 Starting analysis...")
+                from types import SimpleNamespace
+                analyze_args = SimpleNamespace(
+                    pcap=args.output,
+                    output_dir='results',
+                    window=50,
+                    case_id=None,
+                    investigator=None,
+                    agency='TN Police',
+                    no_viz=False,
+                    export=None
+                )
+                return handle_analyze(analyze_args)
+    
+    return 0
+
+
+def handle_info(args):
+    """Handle info command."""
+    try:
+        import ftdc
+        ftdc.print_system_info()
+    except ImportError:
+        print("❌ Error: FTDC module not found")
+        return 1
+    
+    return 0
+
+
+def handle_list(args):
+    """Handle list command."""
+    try:
+        from ftdc.orchestrator import TorAnalysisOrchestrator
+    except ImportError:
+        print("❌ Error: Required modules not available")
+        return 1
+    
+    if not os.path.exists(args.db):
+        print(f"❌ No database found: {args.db}")
+        return 1
+    
+    orchestrator = TorAnalysisOrchestrator(db_path=args.db, results_dir='results')
+    analyses = orchestrator.list_analyses(limit=args.limit)
+    
+    if not analyses:
+        print("No analyses found")
+        return 0
+    
+    print(f"Recent Analyses (showing {len(analyses)}):")
+    print()
+    print(f"{'ID':<40} {'Timestamp':<20} {'PCAP':<30} {'Guards':<8}")
+    print("-" * 100)
+    
+    for analysis in analyses:
+        print(f"{analysis['id']:<40} {analysis['timestamp'][:19]:<20} "
+              f"{analysis['pcap'][:28]:<30} {analysis['guards']:<8}")
+    
+    return 0
+
+
+def handle_export(args):
+    """Handle export command."""
+    try:
+        from ftdc.orchestrator import TorAnalysisOrchestrator
+    except ImportError:
+        print("❌ Error: Required modules not available")
+        return 1
+    
+    if not os.path.exists(args.db):
+        print(f"❌ No database found: {args.db}")
+        return 1
+    
+    orchestrator = TorAnalysisOrchestrator(db_path=args.db, results_dir='results')
+    
+    output_path = orchestrator.export_results(args.analysis_id, args.format)
+    
+    if output_path:
+        print(f"✅ Exported to: {output_path}")
+        return 0
+    else:
+        print(f"❌ Export failed")
+        return 1
+
+
+def handle_consensus(args):
+    """Handle consensus command."""
+    try:
+        from ftdc.consensus import TorConsensusCollector
+        import json
+    except ImportError:
+        print("❌ Error: Required modules not available")
+        return 1
+    
+    print(f"🔍 Fetching TOR consensus data...")
+    print(f"   Relay limit: {args.limit}")
+    print()
+    
+    collector = TorConsensusCollector(limit=args.limit)
+    
+    consensus = collector.fetch_consensus()
+    detailed = collector.fetch_detailed_consensus()
+    relays = collector.parse_consensus(consensus, detailed)
+    
+    # Filter if requested
+    if args.guards_only:
+        relays = collector.get_guard_relays()
+        print(f"✓ Guard relays: {len(relays)}")
+    elif args.exits_only:
+        relays = collector.get_exit_relays()
+        print(f"✓ Exit relays: {len(relays)}")
+    else:
+        print(f"✓ Total relays: {len(relays)}")
+    
+    # Show summary
+    summary = collector.get_consensus_summary()
+    print()
+    print("Consensus Summary:")
+    print(f"  Total relays: {summary['total_relays']}")
+    print(f"  Guard relays: {summary['guard_relays']}")
+    print(f"  Exit relays: {summary['exit_relays']}")
+    print(f"  Countries: {summary['countries_represented']}")
+    print(f"  Avg bandwidth: {summary['avg_bandwidth']/1e6:.2f} MB/s")
+    print(f"  API status: {summary['api_status']}")
+    
+    # Save if requested
+    if args.output:
+        data = {
+            'timestamp': datetime.now().isoformat(),
+            'summary': summary,
+            'relays': relays
+        }
+        with open(args.output, 'w') as f:
+            json.dump(data, f, indent=2)
+        print(f"\n✅ Saved to: {args.output}")
+    
+    return 0
+
+
+def handle_version(args):
+    """Handle version command."""
+    try:
+        import ftdc
+        print(f"TOR-Unveil FTDC Analysis System")
+        print(f"Version: {ftdc.get_version()}")
+        print()
+        
+        deps = ftdc.check_dependencies()
+        print("Components:")
+        for name, available in deps.items():
+            status = "✓" if available else "✗"
+            print(f"  {status} {name}")
+    except ImportError:
+        print("TOR-Unveil FTDC Analysis System")
+        print("Version: Unable to determine")
+    
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
